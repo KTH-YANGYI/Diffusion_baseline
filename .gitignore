@@ -1,1 +1,5 @@
 data
+.venv/
+.venv_broken_*/
+artifacts/
+__pycache__/
