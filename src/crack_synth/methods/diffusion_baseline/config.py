@@ -28,6 +28,7 @@ class BaselineConfig:
     mask_edit_dilate_px: int = 3
     backgrounds_per_donor: int = 4
     seeds_per_pair: int = 4
+    inference_batch_size: int = 1
     planning_seed: int = 20260413
     background_selection_mode: str = "same_video_id"
     prompt: str = ""
@@ -100,6 +101,7 @@ def load_config(config_path: str | Path, *, fold_override: int | None = None) ->
         mask_edit_dilate_px=int(raw.get("mask_edit_dilate_px", 3)),
         backgrounds_per_donor=int(raw.get("backgrounds_per_donor", 4)),
         seeds_per_pair=int(raw.get("seeds_per_pair", 4)),
+        inference_batch_size=int(raw.get("inference_batch_size", 1)),
         planning_seed=int(raw.get("planning_seed", 20260413)),
         background_selection_mode=str(raw.get("background_selection_mode", "same_video_id")),
         prompt=str(raw.get("prompt", "")),
@@ -129,6 +131,8 @@ def _validate_config(config: BaselineConfig) -> None:
         raise ValueError("backgrounds_per_donor must be positive.")
     if config.seeds_per_pair <= 0:
         raise ValueError("seeds_per_pair must be positive.")
+    if config.inference_batch_size <= 0:
+        raise ValueError("inference_batch_size must be positive.")
     if config.background_selection_mode not in {"same_video_id"}:
         raise ValueError("Unsupported background_selection_mode.")
     if config.num_inference_steps <= 0:

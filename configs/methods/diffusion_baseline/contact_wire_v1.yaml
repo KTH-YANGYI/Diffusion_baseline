@@ -11,6 +11,7 @@ mask_edit_dilate_px: 3
 
 backgrounds_per_donor: 4
 seeds_per_pair: 4
+inference_batch_size: 1
 planning_seed: 20260413
 background_selection_mode: same_video_id
 

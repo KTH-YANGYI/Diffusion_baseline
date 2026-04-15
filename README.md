@@ -50,6 +50,13 @@
 
 当前 donor 原图不会直接作为视觉条件输入模型。
 
+当前推理已经支持批量 inpainting：
+
+- 配置项：`inference_batch_size`
+- CLI 覆盖：`--batch-size`
+
+默认值仍然是 `1`，也就是和之前一样逐样本推理。
+
 ## 配置文件
 
 当前默认配置文件是：
@@ -74,6 +81,8 @@ configs/methods/diffusion_baseline/contact_wire_v1.yaml
 build_manifests --config configs/methods/diffusion_baseline/contact_wire_v1.yaml
 prepare_rois --fold 0 --config configs/methods/diffusion_baseline/contact_wire_v1.yaml
 generate_baseline --fold 0 --config configs/methods/diffusion_baseline/contact_wire_v1.yaml
+generate_baseline --fold 0 --config configs/methods/diffusion_baseline/contact_wire_v1.yaml --batch-size 4
+evaluate_generation --fold 0 --latest --config configs/methods/diffusion_baseline/contact_wire_v1.yaml
 ```
 
 ## 产物位置
@@ -89,6 +98,18 @@ artifacts/contact_wire_v1/manifests/
 ```text
 artifacts/contact_wire_v1/methods/diffusion_baseline/
 ```
+
+`evaluate_generation` 会把评估结果写到对应的：
+
+```text
+artifacts/contact_wire_v1/methods/diffusion_baseline/fold_K/run_<timestamp>/evaluation/
+```
+
+里面会包含：
+
+- `generation_eval.jsonl`
+- `generation_eval.csv`
+- `generation_eval_summary.json`
 
 历史服务器拷回结果归档到：
 

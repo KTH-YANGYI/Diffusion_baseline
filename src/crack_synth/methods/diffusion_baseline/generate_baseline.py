@@ -24,6 +24,7 @@ def build_parser() -> ArgumentParser:
     parser.add_argument("--max-donors", type=int, default=None, help="Optional donor limit for smoke tests.")
     parser.add_argument("--max-backgrounds", type=int, default=None, help="Optional background-per-donor override.")
     parser.add_argument("--max-seeds", type=int, default=None, help="Optional seed-per-pair override.")
+    parser.add_argument("--batch-size", type=int, default=None, help="Optional inference batch size override.")
     return parser
 
 
@@ -66,6 +67,9 @@ def main() -> None:
     seeds_per_pair = args.max_seeds if args.max_seeds is not None else config.seeds_per_pair
     if seeds_per_pair <= 0:
         raise ValueError("seeds_per_pair must be positive.")
+    inference_batch_size = args.batch_size if args.batch_size is not None else config.inference_batch_size
+    if inference_batch_size <= 0:
+        raise ValueError("inference_batch_size must be positive.")
 
     run_dir = ensure_dir(fold_dir / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     sample_root = ensure_dir(run_dir / "samples")
@@ -100,55 +104,50 @@ def main() -> None:
     pipe, torch, device_name, torch_dtype = build_pipeline(config)
     outputs: list[dict] = []
 
-    for record in tqdm(planned_pairs, desc="generate_baseline", unit="sample"):
-        sample_dir = ensure_dir(sample_root / record["record_id"])
-        background_full = load_image(record["background_image_path"])
-        crop_box = tuple(int(v) for v in record["crop_box_xyxy"])
-        background = background_full.crop(crop_box)
-        if background.size != (config.roi_out_size, config.roi_out_size):
-            raise ValueError(
-                f"Background crop size {background.size} does not match roi_out_size={config.roi_out_size}."
-            )
-        with Image.open(record["mask_edit_roi_path"]) as mask_image:
-            mask_edit = mask_image.convert("L")
-        with Image.open(record["mask_raw_roi_path"]) as raw_mask_image:
-            mask_raw = raw_mask_image.convert("L")
-
-        mask_for_inference = blur_mask(mask_edit, config.mask_blur)
-        generator = _make_generator(torch, device_name, int(record["seed"]))
+    batch_count = (len(planned_pairs) + inference_batch_size - 1) // inference_batch_size
+    for batch_records in tqdm(
+        _iter_batches(planned_pairs, inference_batch_size),
+        desc="generate_baseline",
+        unit="batch",
+        total=batch_count,
+    ):
+        batch_inputs = [_prepare_inference_input(record, config, torch, device_name) for record in batch_records]
         result = pipe(
-            prompt=record["prompt"],
-            negative_prompt=record["negative_prompt"],
-            image=background,
-            mask_image=mask_for_inference,
+            prompt=[item["prompt"] for item in batch_inputs],
+            negative_prompt=[item["negative_prompt"] for item in batch_inputs],
+            image=[item["background"] for item in batch_inputs],
+            mask_image=[item["mask_for_inference"] for item in batch_inputs],
             num_inference_steps=config.num_inference_steps,
             guidance_scale=config.guidance_scale,
             strength=config.strength,
-            generator=generator,
+            generator=[item["generator"] for item in batch_inputs],
         )
-        image_syn = result.images[0]
 
-        image_syn_path = sample_dir / "image_syn.png"
-        mask_raw_path = sample_dir / "mask_raw_roi.png"
-        mask_edit_path = sample_dir / "mask_edit_roi.png"
-        metadata_path = sample_dir / "metadata.json"
+        for item, image_syn in zip(batch_inputs, result.images, strict=True):
+            record = item["record"]
+            sample_dir = ensure_dir(sample_root / record["record_id"])
+            image_syn_path = sample_dir / "image_syn.png"
+            mask_raw_path = sample_dir / "mask_raw_roi.png"
+            mask_edit_path = sample_dir / "mask_edit_roi.png"
+            metadata_path = sample_dir / "metadata.json"
 
-        image_syn.save(image_syn_path)
-        mask_raw.save(mask_raw_path)
-        mask_edit.save(mask_edit_path)
+            image_syn.save(image_syn_path)
+            item["mask_raw"].save(mask_raw_path)
+            item["mask_edit"].save(mask_edit_path)
 
-        metadata = dict(record)
-        metadata.update(
-            {
-                "image_syn_path": str(image_syn_path),
-                "mask_raw_output_path": str(mask_raw_path),
-                "mask_edit_output_path": str(mask_edit_path),
-                "device": device_name,
-                "torch_dtype": str(torch_dtype).replace("torch.", ""),
-            }
-        )
-        write_json(metadata_path, metadata)
-        outputs.append(metadata)
+            metadata = dict(record)
+            metadata.update(
+                {
+                    "image_syn_path": str(image_syn_path),
+                    "mask_raw_output_path": str(mask_raw_path),
+                    "mask_edit_output_path": str(mask_edit_path),
+                    "device": device_name,
+                    "torch_dtype": str(torch_dtype).replace("torch.", ""),
+                    "inference_batch_size": inference_batch_size,
+                }
+            )
+            write_json(metadata_path, metadata)
+            outputs.append(metadata)
 
     write_jsonl(run_dir / "outputs.jsonl", outputs)
     write_csv_records(run_dir / "outputs.csv", outputs)
@@ -158,6 +157,7 @@ def main() -> None:
             "mode": "inference",
             "planned_pair_count": len(planned_pairs),
             "output_count": len(outputs),
+            "inference_batch_size": inference_batch_size,
             "skipped_donor_count": len(skipped_donors),
             "skipped_donors": skipped_donors[:20],
             "background_manifest": str(normal_manifest),
@@ -303,6 +303,35 @@ def _resolve_dtype(raw_dtype: str, device_name: str, torch):
     if normalized in {"bfloat16", "bf16"}:
         return torch.bfloat16
     return torch.float32
+
+
+def _iter_batches(records: list[dict], batch_size: int):
+    for start in range(0, len(records), batch_size):
+        yield records[start : start + batch_size]
+
+
+def _prepare_inference_input(record: dict, config: BaselineConfig, torch, device_name: str) -> dict:
+    background_full = load_image(record["background_image_path"])
+    crop_box = tuple(int(v) for v in record["crop_box_xyxy"])
+    background = background_full.crop(crop_box)
+    if background.size != (config.roi_out_size, config.roi_out_size):
+        raise ValueError(
+            f"Background crop size {background.size} does not match roi_out_size={config.roi_out_size}."
+        )
+    with Image.open(record["mask_edit_roi_path"]) as mask_image:
+        mask_edit = mask_image.convert("L")
+    with Image.open(record["mask_raw_roi_path"]) as raw_mask_image:
+        mask_raw = raw_mask_image.convert("L")
+    return {
+        "record": record,
+        "prompt": record["prompt"],
+        "negative_prompt": record["negative_prompt"],
+        "background": background,
+        "mask_edit": mask_edit,
+        "mask_raw": mask_raw,
+        "mask_for_inference": blur_mask(mask_edit, config.mask_blur),
+        "generator": _make_generator(torch, device_name, int(record["seed"])),
+    }
 
 
 def _make_generator(torch, device_name: str, seed: int):
