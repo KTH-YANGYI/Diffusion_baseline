@@ -1,0 +1,17 @@
+name: crack-synth
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - accelerate>=0.30
+  - diffusers>=0.29
+  - numpy>=1.24
+  - opencv-python-headless>=4.8
+  - pandas>=2.0
+  - pillow>=10.0
+  - pyyaml>=6.0
+  - safetensors>=0.4
+  - torchvision>=0.16
+  - tqdm>=4.66
+  - transformers>=4.41
