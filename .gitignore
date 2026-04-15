@@ -1,4 +1,6 @@
 data
+.env
+.env.*
 .venv/
 .venv_broken_*/
 artifacts/
