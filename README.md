@@ -85,6 +85,34 @@ generate_baseline --fold 0 --config configs/methods/diffusion_baseline/contact_w
 evaluate_generation --fold 0 --latest --config configs/methods/diffusion_baseline/contact_wire_v1.yaml
 ```
 
+### Manual Single-Case Inference
+
+Use the manual runner when you want to bypass the previous automatic background
+selection logic and explicitly choose the donor/background combination.
+
+Example: run `defect_000826` against normal backgrounds `000693` to `000696`.
+
+```bash
+python -m crack_synth.methods.diffusion_baseline.generate_manual_case \
+  --config configs/methods/diffusion_baseline/contact_wire_v1.yaml \
+  --fold 0 \
+  --donor 826 \
+  --backgrounds 693 694 695 696 \
+  --seed 20260417
+```
+
+If you only want to verify the selected pairing without loading the model, add:
+
+```bash
+python -m crack_synth.methods.diffusion_baseline.generate_manual_case \
+  --config configs/methods/diffusion_baseline/contact_wire_v1.yaml \
+  --fold 0 \
+  --donor 826 \
+  --backgrounds 693 694 695 696 \
+  --seed 20260417 \
+  --plan-only
+```
+
 ## 产物位置
 
 `build_manifests` 输出到：
