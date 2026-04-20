@@ -23,7 +23,6 @@ dependencies = [
 ]
 
 [project.scripts]
-build_manifests = "crack_synth.methods.diffusion_baseline.build_manifests:main"
 prepare_rois = "crack_synth.methods.diffusion_baseline.prepare_rois:main"
 generate_baseline = "crack_synth.methods.diffusion_baseline.generate_baseline:main"
 evaluate_generation = "crack_synth.methods.diffusion_baseline.evaluate_generation:main"

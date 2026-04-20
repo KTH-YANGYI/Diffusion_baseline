@@ -1,149 +1,142 @@
 # Crack Synth Workspace
 
-这个仓库现在按“任务域”组织，而不是按某一条方法线组织。
+本项目现在只保留一条清晰流程：使用一一配对的真实数据，在对应正常图上做 Stable Diffusion Inpainting 裂缝生成。
 
-当前已经接入的一条方法线是：
+旧流程中的 manifest、四折划分、normal pool 背景选择、manual case 都已经移除。
 
-- `diffusion_baseline`
+## 数据结构
 
-它的定位是：
-
-- 使用预训练 `Stable Diffusion Inpainting`
-- 用真实裂缝 `mask` 提供几何约束
-- 在正常背景 patch 上做局部裂缝生成
-- 当前不包含 ControlNet、LoRA、DreamBooth、IP-Adapter
-
-## 目录结构
+默认数据集路径：
 
 ```text
-.
-├─ configs/
-│  └─ methods/
-│     └─ diffusion_baseline/
-│        └─ contact_wire_v1.yaml
-├─ data/
-│  └─ contact_wire_v1/
-├─ artifacts/
-│  └─ contact_wire_v1/
-│     ├─ manifests/
-│     ├─ methods/
-│     │  └─ diffusion_baseline/
-│     └─ archives/
-├─ docs/
-│  ├─ 工程分析.md
-│  ├─ 服务器运行说明.md
-│  └─ 铁路接触线裂缝生成技术路线_保姆级.md
-└─ src/
-   └─ crack_synth/
-      └─ methods/
-         └─ diffusion_baseline/
+C:/Users/18046/Desktop/master/masterthesis/dataset_real
 ```
 
-## 当前方法线的真实输入
+期望结构：
 
-当前 `diffusion_baseline` 在推理时真正使用的是：
+```text
+dataset_real/
+├─ crack/
+│  ├─ 14_crop.jpg
+│  ├─ 14_crop.json
+│  └─ ...
+└─ normal/
+   ├─ 12_crop.jpg
+   └─ ...
+```
 
-- 正常背景 patch
+每张缺陷图需要有一个同名 JSON 标注文件。每张缺陷图只对应一张正常图，模型会直接在对应正常图上做 inpainting。
+
+数据集不提交到 GitHub。详细格式、配对规则和当前本地样本列表见：
+
+```text
+docs/dataset_real_说明.md
+```
+
+## 配对规则
+
+代码会优先读取数据集根目录或 `mapping/` 子目录下的显式配对文件，例如：
+
+- `pairs.csv`
+- `pair_mapping.csv`
+- `crack_normal_pairs.csv`
+- `crack_normal_mapping.csv`
+- `mapping.csv`
+- 对应的 `.json` 版本
+
+如果没有显式配对文件，代码会按文件名中的数字排序后，将 `crack/` 和 `normal/` 一一配对。当前本地数据使用的就是这种 `sorted_filename_order` 配对方式。
+
+## 方法逻辑
+
+当前方法线是 `diffusion_baseline`，使用预训练 `Stable Diffusion Inpainting`。
+
+缺陷图不作为视觉条件输入模型，只用于：
+
+- 从 JSON 标注生成 raw mask
+- 确定 ROI 裁剪位置
+- 保存 `defect_roi.png` 作为对照
+
+模型输入是：
+
+- 对应正常图 ROI
 - `mask_edit_roi`
 - `prompt`
 - `negative_prompt`
 
-当前 donor 原图不会直接作为视觉条件输入模型。
+## 配置
 
-当前推理已经支持批量 inpainting：
-
-- 配置项：`inference_batch_size`
-- CLI 覆盖：`--batch-size`
-
-默认值仍然是 `1`，也就是和之前一样逐样本推理。
-
-## 配置文件
-
-当前默认配置文件是：
+默认配置文件：
 
 ```text
 configs/methods/diffusion_baseline/contact_wire_v1.yaml
 ```
 
-这个配置里显式声明了：
+主要配置项：
 
-- `dataset_root`
-- `manifests_root`
-- `output_root`
-
-这样后面再接别的方法线或别的数据线时，不需要再依赖硬编码顶层目录。
+- `dataset_root`: 一一配对数据集根目录
+- `output_root`: ROI、生成结果和评估结果输出目录
+- `roi_out_size`: 输入模型的 ROI 尺寸
+- `mask_edit_dilate_px`: JSON raw mask 外扩像素半径
+- `seeds_per_pair`: 每对样本生成几张
+- `inference_batch_size`: 推理 batch size
 
 ## CLI
 
-保留现有命令名不变：
+准备 ROI 和 mask：
 
 ```bash
-build_manifests --config configs/methods/diffusion_baseline/contact_wire_v1.yaml
-prepare_rois --fold 0 --config configs/methods/diffusion_baseline/contact_wire_v1.yaml
-generate_baseline --fold 0 --config configs/methods/diffusion_baseline/contact_wire_v1.yaml
-generate_baseline --fold 0 --config configs/methods/diffusion_baseline/contact_wire_v1.yaml --batch-size 4
-evaluate_generation --fold 0 --latest --config configs/methods/diffusion_baseline/contact_wire_v1.yaml
+prepare_rois --config configs/methods/diffusion_baseline/contact_wire_v1.yaml
 ```
 
-### Manual Single-Case Inference
-
-Use the manual runner when you want to bypass the previous automatic background
-selection logic and explicitly choose the donor/background combination.
-
-Example: run `defect_000826` against normal backgrounds `000693` to `000696`.
+只检查生成计划，不加载模型：
 
 ```bash
-python -m crack_synth.methods.diffusion_baseline.generate_manual_case \
-  --config configs/methods/diffusion_baseline/contact_wire_v1.yaml \
-  --fold 0 \
-  --donor 826 \
-  --backgrounds 693 694 695 696 \
-  --seed 20260417
+generate_baseline --config configs/methods/diffusion_baseline/contact_wire_v1.yaml --plan-only
 ```
 
-If you only want to verify the selected pairing without loading the model, add:
+执行 inpainting：
 
 ```bash
-python -m crack_synth.methods.diffusion_baseline.generate_manual_case \
-  --config configs/methods/diffusion_baseline/contact_wire_v1.yaml \
-  --fold 0 \
-  --donor 826 \
-  --backgrounds 693 694 695 696 \
-  --seed 20260417 \
-  --plan-only
+generate_baseline --config configs/methods/diffusion_baseline/contact_wire_v1.yaml
 ```
 
-## 产物位置
+评估最近一次生成：
 
-`build_manifests` 输出到：
+```bash
+evaluate_generation --latest --config configs/methods/diffusion_baseline/contact_wire_v1.yaml
+```
+
+## 产物
+
+`prepare_rois` 会生成：
 
 ```text
-artifacts/contact_wire_v1/manifests/
+artifacts/dataset_real/methods/diffusion_baseline/roi_assets/
 ```
 
-`prepare_rois` 和 `generate_baseline` 输出到：
+关键文件：
+
+- `roi_pairs.jsonl`
+- `pairs/<pair_id>/defect_roi.png`
+- `pairs/<pair_id>/background_roi.png`
+- `pairs/<pair_id>/mask_raw_roi.png`
+- `pairs/<pair_id>/mask_edit_roi.png`
+
+`generate_baseline` 会生成：
 
 ```text
-artifacts/contact_wire_v1/methods/diffusion_baseline/
+artifacts/dataset_real/methods/diffusion_baseline/run_<timestamp>/
 ```
 
-`evaluate_generation` 会把评估结果写到对应的：
+其中包含：
 
-```text
-artifacts/contact_wire_v1/methods/diffusion_baseline/fold_K/run_<timestamp>/evaluation/
-```
-
-里面会包含：
-
-- `generation_eval.jsonl`
-- `generation_eval.csv`
-- `generation_eval_summary.json`
-
-历史服务器拷回结果归档到：
-
-```text
-artifacts/contact_wire_v1/archives/server_exports/
-```
+- `planned_pairs.jsonl`
+- `outputs.jsonl`
+- `samples/<record_id>/image_syn.png`
+- `samples/<record_id>/background_roi.png`
+- `samples/<record_id>/mask_raw_roi.png`
+- `samples/<record_id>/mask_edit_roi.png`
+- `samples/<record_id>/metadata.json`
 
 ## 环境
 
@@ -158,9 +151,3 @@ pip install -e .
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cu121
 ```
-
-## 说明文档
-
-- 项目分析：`docs/工程分析.md`
-- 服务器运行说明：`docs/服务器运行说明.md`
-- 技术路线背景说明：`docs/铁路接触线裂缝生成技术路线_保姆级.md`

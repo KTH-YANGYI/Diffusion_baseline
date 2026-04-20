@@ -16,8 +16,7 @@ from .roi import dilate_binary_mask, load_binary_mask, load_image
 def build_parser() -> ArgumentParser:
     parser = ArgumentParser(description="Evaluate generation quality for one diffusion run.")
     parser.add_argument("--run-dir", type=str, default=None, help="Explicit run directory to evaluate.")
-    parser.add_argument("--fold", type=int, default=None, help="Fold index used when resolving the latest run.")
-    parser.add_argument("--latest", action="store_true", help="Evaluate the latest run under the selected fold.")
+    parser.add_argument("--latest", action="store_true", help="Evaluate the latest run under the configured output root.")
     parser.add_argument("--config", type=str, default=DEFAULT_CONFIG_PATH, help="Path to YAML config.")
     parser.add_argument("--max-samples", type=int, default=None, help="Optional limit for smoke tests.")
     parser.add_argument("--ring-width-px", type=int, default=5, help="Width of the local ring used for contrast comparison.")
@@ -31,7 +30,7 @@ def build_parser() -> ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    config = load_config(args.config, fold_override=args.fold)
+    config = load_config(args.config)
     run_dir = _resolve_run_dir(config, args.run_dir, args.latest)
     records = _load_run_records(run_dir)
     if args.max_samples is not None:
@@ -80,10 +79,9 @@ def _resolve_run_dir(config, raw_run_dir: str | None, use_latest: bool) -> Path:
             raise FileNotFoundError(f"Run directory does not exist: {run_dir}")
         return run_dir
 
-    fold_dir = config.output_root / f"fold_{config.fold_index}"
-    run_dirs = sorted(path for path in fold_dir.glob("run_*") if path.is_dir())
+    run_dirs = sorted(path for path in config.output_root.glob("run_*") if path.is_dir())
     if not run_dirs:
-        raise FileNotFoundError(f"No run directories found under {fold_dir}")
+        raise FileNotFoundError(f"No run directories found under {config.output_root}")
     if use_latest or len(run_dirs) == 1:
         return run_dirs[-1]
     raise ValueError("Multiple run directories found. Pass --latest or provide --run-dir explicitly.")
@@ -138,16 +136,25 @@ def evaluate_record(
             _resolve_record_path(record.get("mask_edit_roi_path", ""), config),
         ]
     )
-    background_image_path = _resolve_record_path(record.get("background_image_path", ""), config)
-
     synth = _load_gray(image_syn_path)
-    background_full = _load_gray(background_image_path)
-    crop_box = tuple(int(v) for v in record["crop_box_xyxy"])
-    x0, y0, x1, y1 = crop_box
-    background = background_full[y0:y1, x0:x1]
+    background_roi_path = _first_existing_path(
+        [
+            sample_dir / "background_roi.png",
+            _resolve_record_path(record.get("background_roi_output_path", ""), config),
+            _resolve_record_path(record.get("background_roi_path", ""), config),
+        ]
+    )
+    if background_roi_path is not None:
+        background = _load_gray(background_roi_path)
+    else:
+        background_image_path = _resolve_record_path(record.get("background_image_path", ""), config)
+        background_full = _load_gray(background_image_path)
+        crop_box = tuple(int(v) for v in record["crop_box_xyxy"])
+        x0, y0, x1, y1 = crop_box
+        background = background_full[y0:y1, x0:x1]
     if background.shape != synth.shape:
         raise ValueError(
-            f"Background crop shape {background.shape} does not match generated image shape {synth.shape} for {record['record_id']}"
+            f"Background ROI shape {background.shape} does not match generated image shape {synth.shape} for {record['record_id']}"
         )
 
     raw_mask = _mask_to_bool(mask_raw_path)
@@ -275,7 +282,6 @@ def _resolve_record_path(path_value: str | Path, config) -> Path | None:
             path,
             repo_root=config.repo_root,
             dataset_root=config.dataset_root,
-            manifests_root=config.manifests_root,
             output_root=config.output_root,
         )
 
@@ -290,7 +296,6 @@ def _resolve_record_path(path_value: str | Path, config) -> Path | None:
                 candidate,
                 repo_root=config.repo_root,
                 dataset_root=config.dataset_root,
-                manifests_root=config.manifests_root,
                 output_root=config.output_root,
             )
         except Exception:
@@ -301,10 +306,17 @@ def _resolve_record_path(path_value: str | Path, config) -> Path | None:
 
 
 def _pick_existing_path(candidates: list[Path | None]) -> Path:
+    existing = _first_existing_path(candidates)
+    if existing is not None:
+        return existing
+    raise FileNotFoundError(f"None of the candidate paths exist: {candidates}")
+
+
+def _first_existing_path(candidates: list[Path | None]) -> Path | None:
     for candidate in candidates:
         if candidate is not None and candidate.exists():
             return candidate.resolve()
-    raise FileNotFoundError(f"None of the candidate paths exist: {candidates}")
+    return None
 
 
 def _load_gray(path: Path) -> np.ndarray:

@@ -5,3 +5,4 @@ data
 .venv_broken_*/
 artifacts/
 __pycache__/
+*.egg-info/

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from argparse import ArgumentParser
-from collections import defaultdict
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
@@ -10,19 +9,17 @@ import random
 from PIL import Image
 
 from .config import DEFAULT_CONFIG_PATH, BaselineConfig, dump_resolved_config, load_config
-from .io_utils import ensure_dir, read_csv_records, read_jsonl, write_csv_records, write_json, write_jsonl
-from .paths import audit_and_resolve_records, resolve_project_path
+from .io_utils import ensure_dir, read_jsonl, write_csv_records, write_json, write_jsonl
+from .paths import resolve_project_path
 from .progress import tqdm
 from .roi import blur_mask, load_image
 
 
 def build_parser() -> ArgumentParser:
-    parser = ArgumentParser(description="Generate patch-level diffusion baseline outputs for one fold.")
-    parser.add_argument("--fold", type=int, required=False, help="Fold index override.")
+    parser = ArgumentParser(description="Generate diffusion inpainting outputs from prepared crack/normal pairs.")
     parser.add_argument("--config", type=str, default=DEFAULT_CONFIG_PATH, help="Path to YAML config.")
     parser.add_argument("--plan-only", action="store_true", help="Write planned_pairs only, skip model loading and inference.")
-    parser.add_argument("--max-donors", type=int, default=None, help="Optional donor limit for smoke tests.")
-    parser.add_argument("--max-backgrounds", type=int, default=None, help="Optional background-per-donor override.")
+    parser.add_argument("--max-pairs", type=int, default=None, help="Optional pair limit for smoke tests.")
     parser.add_argument("--max-seeds", type=int, default=None, help="Optional seed-per-pair override.")
     parser.add_argument("--batch-size", type=int, default=None, help="Optional inference batch size override.")
     return parser
@@ -30,40 +27,22 @@ def build_parser() -> ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    config = load_config(args.config, fold_override=args.fold)
+    config = load_config(args.config)
 
-    fold_dir = ensure_dir(config.output_root / f"fold_{config.fold_index}")
-    roi_root = ensure_dir(fold_dir / "roi_assets")
-    donor_manifest_path = roi_root / "donor_manifest.jsonl"
-    if not donor_manifest_path.exists():
+    roi_root = ensure_dir(config.output_root / "roi_assets")
+    pair_file = roi_root / "roi_pairs.jsonl"
+    if not pair_file.exists():
         raise FileNotFoundError(
-            f"Missing donor manifest: {donor_manifest_path}. Run prepare_rois first."
+            f"Missing prepared pair file: {pair_file}. Run prepare_rois first."
         )
 
-    donors = read_jsonl(donor_manifest_path)
-    if args.max_donors is not None:
-        donors = donors[: args.max_donors]
-    if not donors:
-        raise ValueError("No donor ROI records found for the requested fold.")
-    donors = [_resolve_donor_record_paths(record, config) for record in donors]
+    pairs = read_jsonl(pair_file)
+    if args.max_pairs is not None:
+        pairs = pairs[: args.max_pairs]
+    if not pairs:
+        raise ValueError("No prepared ROI pair records found.")
+    pairs = [_resolve_pair_record_paths(record, config) for record in pairs]
 
-    normal_manifest = config.manifests_root / "normal_pool.csv"
-    if not normal_manifest.exists():
-        raise FileNotFoundError(f"Missing normal manifest: {normal_manifest}")
-    normal_records = read_csv_records(normal_manifest)
-    normal_records, normal_audit = audit_and_resolve_records(
-        normal_records,
-        repo_root=config.repo_root,
-        dataset_root=config.dataset_root,
-        manifests_root=config.manifests_root,
-        output_root=config.output_root,
-        require_mask=False,
-    )
-
-    normals_by_video = group_normals_by_video(normal_records)
-    backgrounds_per_donor = args.max_backgrounds if args.max_backgrounds is not None else config.backgrounds_per_donor
-    if backgrounds_per_donor <= 0:
-        raise ValueError("backgrounds_per_donor must be positive.")
     seeds_per_pair = args.max_seeds if args.max_seeds is not None else config.seeds_per_pair
     if seeds_per_pair <= 0:
         raise ValueError("seeds_per_pair must be positive.")
@@ -71,16 +50,13 @@ def main() -> None:
     if inference_batch_size <= 0:
         raise ValueError("inference_batch_size must be positive.")
 
-    run_dir = ensure_dir(fold_dir / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    run_dir = ensure_dir(config.output_root / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     sample_root = ensure_dir(run_dir / "samples")
     dump_resolved_config(config, run_dir / "resolved_config.json")
-    write_json(run_dir / "normal_path_audit.json", normal_audit)
 
-    planned_pairs, skipped_donors = plan_pairs(
-        donors=donors,
-        normals_by_video=normals_by_video,
+    planned_pairs = plan_pairs(
+        pairs=pairs,
         config=config,
-        backgrounds_per_donor=backgrounds_per_donor,
         seeds_per_pair=seeds_per_pair,
         run_dir=run_dir,
     )
@@ -92,10 +68,9 @@ def main() -> None:
             run_dir / "summary.json",
             {
                 "mode": "plan_only",
-                "planned_pair_count": len(planned_pairs),
-                "skipped_donor_count": len(skipped_donors),
-                "skipped_donors": skipped_donors[:20],
-                "background_manifest": str(normal_manifest),
+                "prepared_pair_count": len(pairs),
+                "planned_output_count": len(planned_pairs),
+                "pair_file": str(pair_file),
                 "run_dir": str(run_dir),
             },
         )
@@ -129,11 +104,13 @@ def main() -> None:
             image_syn_path = sample_dir / "image_syn.png"
             mask_raw_path = sample_dir / "mask_raw_roi.png"
             mask_edit_path = sample_dir / "mask_edit_roi.png"
+            background_roi_path = sample_dir / "background_roi.png"
             metadata_path = sample_dir / "metadata.json"
 
             image_syn.save(image_syn_path)
             item["mask_raw"].save(mask_raw_path)
             item["mask_edit"].save(mask_edit_path)
+            item["background"].save(background_roi_path)
 
             metadata = dict(record)
             metadata.update(
@@ -141,6 +118,7 @@ def main() -> None:
                     "image_syn_path": str(image_syn_path),
                     "mask_raw_output_path": str(mask_raw_path),
                     "mask_edit_output_path": str(mask_edit_path),
+                    "background_roi_output_path": str(background_roi_path),
                     "device": device_name,
                     "torch_dtype": str(torch_dtype).replace("torch.", ""),
                     "inference_batch_size": inference_batch_size,
@@ -155,12 +133,11 @@ def main() -> None:
         run_dir / "summary.json",
         {
             "mode": "inference",
-            "planned_pair_count": len(planned_pairs),
+            "prepared_pair_count": len(pairs),
+            "planned_output_count": len(planned_pairs),
             "output_count": len(outputs),
             "inference_batch_size": inference_batch_size,
-            "skipped_donor_count": len(skipped_donors),
-            "skipped_donors": skipped_donors[:20],
-            "background_manifest": str(normal_manifest),
+            "pair_file": str(pair_file),
             "run_dir": str(run_dir),
         },
     )
@@ -168,93 +145,50 @@ def main() -> None:
 
 def plan_pairs(
     *,
-    donors: list[dict],
-    normals_by_video: dict[str, list[dict]],
+    pairs: list[dict],
     config: BaselineConfig,
-    backgrounds_per_donor: int,
     seeds_per_pair: int,
     run_dir: Path,
-) -> tuple[list[dict], list[dict]]:
+) -> list[dict]:
     planned: list[dict] = []
-    skipped_donors: list[dict] = []
-    for donor in donors:
-        donor_video_id = str(donor.get("video_id", "")).strip()
-        candidate_normals = normals_by_video.get(donor_video_id, [])
-        if not candidate_normals:
-            skipped_donors.append(
+    for pair in pairs:
+        pair_rng = random.Random(_stable_int_seed(f"{config.planning_seed}:{pair['pair_id']}"))
+        seeds = [pair_rng.randint(0, 2_147_483_647) for _ in range(seeds_per_pair)]
+        for seed in seeds:
+            record_id = f"{pair['pair_id']}__seed_{seed}"
+            planned.append(
                 {
-                    "donor_id": donor["sample_id"],
-                    "donor_video_id": donor_video_id,
-                    "reason": "no_normal_background_for_same_video_id",
+                    "record_id": record_id,
+                    "run_dir": str(run_dir),
+                    "sample_dir": str(run_dir / "samples" / record_id),
+                    "model_id_or_path": config.model_id_or_path,
+                    "prompt": config.prompt,
+                    "negative_prompt": config.negative_prompt,
+                    "num_inference_steps": config.num_inference_steps,
+                    "guidance_scale": config.guidance_scale,
+                    "strength": config.strength,
+                    "mask_blur": config.mask_blur,
+                    "seed": seed,
+                    "pair_id": pair["pair_id"],
+                    "defect_id": pair["defect_id"],
+                    "normal_id": pair["normal_id"],
+                    "defect_image_name": pair["defect_image_name"],
+                    "normal_image_name": pair["normal_image_name"],
+                    "defect_frame_id": pair.get("defect_frame_id", ""),
+                    "normal_frame_id": pair.get("normal_frame_id", ""),
+                    "pairing_source": pair.get("pairing_source", ""),
+                    "defect_image_path": pair["defect_image_path"],
+                    "normal_image_path": pair["normal_image_path"],
+                    "defect_json_path": pair["defect_json_path"],
+                    "image_roi_path": pair["image_roi_path"],
+                    "background_roi_path": pair["background_roi_path"],
+                    "mask_raw_roi_path": pair["mask_raw_roi_path"],
+                    "mask_edit_roi_path": pair["mask_edit_roi_path"],
+                    "crop_box_xyxy": pair["crop_box_xyxy"],
+                    "pairing_mode": "dataset_one_to_one",
                 }
             )
-            continue
-
-        ranked_normals = rank_backgrounds_for_donor(donor, candidate_normals)
-        background_count = min(backgrounds_per_donor, len(ranked_normals))
-        for bg_order, background in enumerate(ranked_normals[:background_count]):
-            pair_rng = random.Random(
-                _stable_int_seed(
-                    f"{config.planning_seed}:{donor['sample_id']}:{background['sample_id']}:{bg_order}"
-                )
-            )
-            seeds = [pair_rng.randint(0, 2_147_483_647) for _ in range(seeds_per_pair)]
-            for seed in seeds:
-                record_id = f"{donor['sample_id']}__{background['sample_id']}__seed_{seed}"
-                planned.append(
-                    {
-                        "record_id": record_id,
-                        "fold_index": config.fold_index,
-                        "run_dir": str(run_dir),
-                        "sample_dir": str(run_dir / "samples" / record_id),
-                        "model_id_or_path": config.model_id_or_path,
-                        "prompt": config.prompt,
-                        "negative_prompt": config.negative_prompt,
-                        "num_inference_steps": config.num_inference_steps,
-                        "guidance_scale": config.guidance_scale,
-                        "strength": config.strength,
-                        "mask_blur": config.mask_blur,
-                        "seed": seed,
-                        "donor_id": donor["sample_id"],
-                        "donor_video_id": donor.get("video_id", ""),
-                        "donor_frame_id": donor.get("frame_id", ""),
-                        "background_selection_mode": config.background_selection_mode,
-                        "image_roi_path": donor["image_roi_path"],
-                        "mask_raw_roi_path": donor["mask_raw_roi_path"],
-                        "mask_edit_roi_path": donor["mask_edit_roi_path"],
-                        "crop_box_xyxy": donor["crop_box_xyxy"],
-                        "background_id": background["sample_id"],
-                        "background_video_id": background.get("video_id", ""),
-                        "background_frame_id": background.get("frame_id", ""),
-                        "background_image_path": background["resolved_image_path"],
-                    }
-                )
-    return planned, skipped_donors
-
-
-def group_normals_by_video(normal_records: list[dict]) -> dict[str, list[dict]]:
-    grouped: dict[str, list[dict]] = defaultdict(list)
-    for row in normal_records:
-        grouped[str(row.get("video_id", "")).strip()].append(row)
-    return dict(grouped)
-
-
-def rank_backgrounds_for_donor(donor: dict, candidate_normals: list[dict]) -> list[dict]:
-    donor_frame_id = _parse_optional_int(donor.get("frame_id", ""))
-    if donor_frame_id is None:
-        return sorted(candidate_normals, key=lambda row: row.get("sample_id", ""))
-
-    def sort_key(row: dict) -> tuple[int, int, str]:
-        normal_frame_id = _parse_optional_int(row.get("frame_id", ""))
-        if normal_frame_id is None:
-            return (10**9, 10**9, row.get("sample_id", ""))
-        return (
-            abs(normal_frame_id - donor_frame_id),
-            normal_frame_id,
-            row.get("sample_id", ""),
-        )
-
-    return sorted(candidate_normals, key=sort_key)
+    return planned
 
 
 def build_pipeline(config: BaselineConfig):
@@ -311,12 +245,10 @@ def _iter_batches(records: list[dict], batch_size: int):
 
 
 def _prepare_inference_input(record: dict, config: BaselineConfig, torch, device_name: str) -> dict:
-    background_full = load_image(record["background_image_path"])
-    crop_box = tuple(int(v) for v in record["crop_box_xyxy"])
-    background = background_full.crop(crop_box)
+    background = load_image(record["background_roi_path"])
     if background.size != (config.roi_out_size, config.roi_out_size):
         raise ValueError(
-            f"Background crop size {background.size} does not match roi_out_size={config.roi_out_size}."
+            f"Background ROI size {background.size} does not match roi_out_size={config.roi_out_size}."
         )
     with Image.open(record["mask_edit_roi_path"]) as mask_image:
         mask_edit = mask_image.convert("L")
@@ -355,13 +287,14 @@ def _parse_optional_int(value: object) -> int | None:
         return None
 
 
-def _resolve_donor_record_paths(record: dict, config: BaselineConfig) -> dict:
+def _resolve_pair_record_paths(record: dict, config: BaselineConfig) -> dict:
     resolved = dict(record)
     for key in [
-        "resolved_image_path",
-        "resolved_mask_path",
-        "resolved_json_path",
+        "defect_image_path",
+        "normal_image_path",
+        "defect_json_path",
         "image_roi_path",
+        "background_roi_path",
         "mask_raw_roi_path",
         "mask_edit_roi_path",
     ]:
@@ -372,7 +305,6 @@ def _resolve_donor_record_paths(record: dict, config: BaselineConfig) -> dict:
                     value,
                     repo_root=config.repo_root,
                     dataset_root=config.dataset_root,
-                    manifests_root=config.manifests_root,
                     output_root=config.output_root,
                 )
             )

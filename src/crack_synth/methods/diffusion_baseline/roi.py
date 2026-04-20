@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import json
 
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,41 @@ def load_image(path: str | Path) -> Image.Image:
 def load_binary_mask(path: str | Path) -> Image.Image:
     with Image.open(path) as mask:
         return threshold_mask(mask.convert("L"))
+
+
+def load_labelme_mask(path: str | Path, image_size: tuple[int, int] | None = None) -> Image.Image:
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    width = int(data.get("imageWidth") or (image_size[0] if image_size else 0))
+    height = int(data.get("imageHeight") or (image_size[1] if image_size else 0))
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Cannot infer mask size from annotation: {path}")
+
+    mask = Image.new("L", (width, height), color=0)
+    draw = ImageDraw.Draw(mask)
+    for shape in data.get("shapes", []):
+        points = [
+            (float(point[0]), float(point[1]))
+            for point in shape.get("points", [])
+            if len(point) >= 2
+        ]
+        if not points:
+            continue
+
+        shape_type = str(shape.get("shape_type") or "polygon").lower()
+        if shape_type == "rectangle" and len(points) >= 2:
+            x_values = [point[0] for point in points[:2]]
+            y_values = [point[1] for point in points[:2]]
+            draw.rectangle((min(x_values), min(y_values), max(x_values), max(y_values)), fill=255)
+        elif shape_type == "circle" and len(points) >= 2:
+            cx, cy = points[0]
+            px, py = points[1]
+            radius = ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5
+            draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=255)
+        elif shape_type in {"line", "linestrip"} and len(points) >= 2:
+            draw.line(points, fill=255, width=3)
+        elif len(points) >= 3:
+            draw.polygon(points, fill=255)
+    return threshold_mask(mask)
 
 
 def threshold_mask(mask: Image.Image) -> Image.Image:
@@ -124,6 +160,15 @@ def resize_with_padding(
 def dilate_binary_mask(mask: Image.Image, radius_px: int) -> Image.Image:
     if radius_px <= 0:
         return threshold_mask(mask)
+    try:
+        import cv2
+
+        array = (np.asarray(mask) > 0).astype(np.uint8) * 255
+        kernel = np.ones((radius_px * 2 + 1, radius_px * 2 + 1), dtype=np.uint8)
+        dilated = cv2.dilate(array, kernel, iterations=1)
+        return threshold_mask(Image.fromarray(dilated, mode="L"))
+    except ImportError:
+        pass
     kernel = radius_px * 2 + 1
     dilated = mask.filter(ImageFilter.MaxFilter(size=kernel))
     return threshold_mask(dilated)

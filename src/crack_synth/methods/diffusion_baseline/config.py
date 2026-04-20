@@ -19,18 +19,13 @@ DEFAULT_CONFIG_PATH = "configs/methods/diffusion_baseline/contact_wire_v1.yaml"
 class BaselineConfig:
     repo_root: Path
     dataset_root: Path
-    manifests_root: Path
-    fold_index: int
     model_id_or_path: str
     output_root: Path
-    roi_margin_px: int = 96
     roi_out_size: int = 512
     mask_edit_dilate_px: int = 3
-    backgrounds_per_donor: int = 4
     seeds_per_pair: int = 4
     inference_batch_size: int = 1
     planning_seed: int = 20260413
-    background_selection_mode: str = "same_video_id"
     prompt: str = ""
     negative_prompt: str = ""
     num_inference_steps: int = 35
@@ -47,7 +42,6 @@ class BaselineConfig:
         data = asdict(self)
         data["repo_root"] = str(self.repo_root)
         data["dataset_root"] = str(self.dataset_root)
-        data["manifests_root"] = str(self.manifests_root)
         data["output_root"] = str(self.output_root)
         return data
 
@@ -70,40 +64,28 @@ def _discover_repo_root(config_path: Path) -> Path:
     return config_path.parent.resolve()
 
 
-def load_config(config_path: str | Path, *, fold_override: int | None = None) -> BaselineConfig:
+def load_config(config_path: str | Path) -> BaselineConfig:
     config_path = Path(config_path).resolve()
     base_dir = config_path.parent
     raw = _load_mapping(config_path) or {}
 
     repo_root = _resolve_path(base_dir, raw.get("repo_root"), default=_discover_repo_root(config_path))
-    dataset_root = _resolve_path(base_dir, raw.get("dataset_root"), default=repo_root / "data" / "contact_wire_v1")
-    manifests_root = _resolve_path(
-        base_dir,
-        raw.get("manifests_root"),
-        default=repo_root / "artifacts" / "contact_wire_v1" / "manifests",
-    )
+    dataset_root = _resolve_path(base_dir, raw.get("dataset_root"), default=repo_root.parent / "dataset_real")
     output_root = _resolve_path(
         base_dir,
         raw.get("output_root"),
-        default=repo_root / "artifacts" / "contact_wire_v1" / "methods" / "diffusion_baseline",
+        default=repo_root / "artifacts" / "dataset_real" / "methods" / "diffusion_baseline",
     )
-    fold_index = fold_override if fold_override is not None else int(raw.get("fold_index", 0))
-
     config = BaselineConfig(
         repo_root=repo_root,
         dataset_root=dataset_root,
-        manifests_root=manifests_root,
-        fold_index=fold_index,
         model_id_or_path=str(raw.get("model_id_or_path", "stable-diffusion-v1-5/stable-diffusion-inpainting")),
         output_root=output_root,
-        roi_margin_px=int(raw.get("roi_margin_px", 96)),
         roi_out_size=int(raw.get("roi_out_size", 512)),
         mask_edit_dilate_px=int(raw.get("mask_edit_dilate_px", 3)),
-        backgrounds_per_donor=int(raw.get("backgrounds_per_donor", 4)),
         seeds_per_pair=int(raw.get("seeds_per_pair", 4)),
         inference_batch_size=int(raw.get("inference_batch_size", 1)),
         planning_seed=int(raw.get("planning_seed", 20260413)),
-        background_selection_mode=str(raw.get("background_selection_mode", "same_video_id")),
         prompt=str(raw.get("prompt", "")),
         negative_prompt=str(raw.get("negative_prompt", "")),
         num_inference_steps=int(raw.get("num_inference_steps", 35)),
@@ -123,18 +105,12 @@ def load_config(config_path: str | Path, *, fold_override: int | None = None) ->
 def _validate_config(config: BaselineConfig) -> None:
     if config.roi_out_size <= 0:
         raise ValueError("roi_out_size must be positive.")
-    if config.roi_margin_px < 0:
-        raise ValueError("roi_margin_px cannot be negative.")
     if config.mask_edit_dilate_px < 0:
         raise ValueError("mask_edit_dilate_px cannot be negative.")
-    if config.backgrounds_per_donor <= 0:
-        raise ValueError("backgrounds_per_donor must be positive.")
     if config.seeds_per_pair <= 0:
         raise ValueError("seeds_per_pair must be positive.")
     if config.inference_batch_size <= 0:
         raise ValueError("inference_batch_size must be positive.")
-    if config.background_selection_mode not in {"same_video_id"}:
-        raise ValueError("Unsupported background_selection_mode.")
     if config.num_inference_steps <= 0:
         raise ValueError("num_inference_steps must be positive.")
     if not (0.0 <= config.strength <= 1.0):
