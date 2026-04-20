@@ -33,6 +33,12 @@ dataset_real/
 docs/dataset_real_说明.md
 ```
 
+结果复现和查看说明见：
+
+```text
+docs/results_preview.md
+```
+
 ## 配对规则
 
 代码会优先读取数据集根目录或 `mapping/` 子目录下的显式配对文件，例如：
