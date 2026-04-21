@@ -11,6 +11,7 @@ from .paired_dataset import load_paired_samples
 from .paths import to_repo_relative
 from .progress import tqdm
 from .roi import (
+    blur_mask,
     compute_union_bbox,
     crop_pair,
     dilate_binary_mask,
@@ -91,17 +92,23 @@ def main() -> None:
             )
             mask_raw_roi = threshold_mask(mask_raw_roi)
         mask_edit_roi = dilate_binary_mask(mask_raw_roi, config.mask_edit_dilate_px)
+        mask_paste_roi = blur_mask(
+            dilate_binary_mask(mask_raw_roi, config.mask_paste_dilate_px),
+            config.mask_paste_blur_px,
+        )
 
         sample_dir = ensure_dir(pair_root / pair_id)
         image_roi_path = sample_dir / "defect_roi.png"
         background_roi_path = sample_dir / "background_roi.png"
         mask_raw_roi_path = sample_dir / "mask_raw_roi.png"
         mask_edit_roi_path = sample_dir / "mask_edit_roi.png"
+        mask_paste_roi_path = sample_dir / "mask_paste_roi.png"
 
         image_roi.save(image_roi_path)
         background_roi.save(background_roi_path)
         mask_raw_roi.save(mask_raw_roi_path)
         mask_edit_roi.save(mask_edit_roi_path)
+        mask_paste_roi.save(mask_paste_roi_path)
 
         pair_records.append(
             {
@@ -113,10 +120,13 @@ def main() -> None:
                 "background_roi_path": to_repo_relative(background_roi_path, config.repo_root),
                 "mask_raw_roi_path": to_repo_relative(mask_raw_roi_path, config.repo_root),
                 "mask_edit_roi_path": to_repo_relative(mask_edit_roi_path, config.repo_root),
+                "mask_paste_roi_path": to_repo_relative(mask_paste_roi_path, config.repo_root),
                 "original_bbox_xyxy": [bbox[0], bbox[1], bbox[2], bbox[3]],
                 "crop_box_xyxy": [crop_box[0], crop_box[1], crop_box[2], crop_box[3]],
                 "roi_out_size": config.roi_out_size,
                 "mask_edit_dilate_px": config.mask_edit_dilate_px,
+                "mask_paste_dilate_px": config.mask_paste_dilate_px,
+                "mask_paste_blur_px": config.mask_paste_blur_px,
                 "crop_mode": "fixed_square_centered_on_bbox",
                 "resize_scale": 1.0 if resize_meta is None else resize_meta.scale,
                 "resized_width": image_roi.size[0] if resize_meta is None else resize_meta.resized_width,

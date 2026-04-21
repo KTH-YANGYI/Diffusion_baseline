@@ -7,7 +7,7 @@ import json
 from PIL import Image
 
 from crack_synth.methods.diffusion_baseline.config import DEFAULT_CONFIG_PATH, load_config
-from crack_synth.methods.diffusion_baseline.guide import make_crack_guide
+from crack_synth.methods.diffusion_baseline.guide import make_crack_guide, make_paired_residual_crack_guide
 from crack_synth.methods.diffusion_baseline.io_utils import (
     ensure_dir,
     read_jsonl,
@@ -27,8 +27,7 @@ from crack_synth.methods.diffusion_baseline.roi import (
 
 
 DEFAULT_CAPTION = (
-    "ctwirecrack, close-up grayscale industrial inspection image of a metallic railway "
-    "contact wire surface, one thin dark longitudinal crack"
+    "ctwirecrack, close-up grayscale railway contact wire surface, one thin dark longitudinal crack"
 )
 
 
@@ -36,9 +35,9 @@ def build_parser() -> ArgumentParser:
     parser = ArgumentParser(description="Prepare Stable Diffusion inpainting LoRA samples from ROI pairs.")
     parser.add_argument("--config", type=str, default=DEFAULT_CONFIG_PATH, help="Path to YAML config.")
     parser.add_argument("--output-dir", type=str, default=None, help="Output lora_data directory.")
-    parser.add_argument("--crop-sizes", type=int, nargs="+", default=[128, 160, 192, 256])
+    parser.add_argument("--crop-sizes", type=int, nargs="+", default=[96, 128, 160, 192, 256])
     parser.add_argument("--resolution", type=int, default=512, help="Training image resolution.")
-    parser.add_argument("--mask-train-dilate-px", type=int, default=2)
+    parser.add_argument("--mask-train-dilate-px", type=int, default=3)
     parser.add_argument("--pair-offset", type=int, default=0, help="Skip this many pairs before selecting train pairs.")
     parser.add_argument("--max-pairs", type=int, default=None, help="Number of pairs to export for training.")
     parser.add_argument("--holdout-pairs", type=int, default=0, help="Save this many following pairs for inference.")
@@ -62,8 +61,9 @@ def main() -> None:
         raise ValueError("--crop-sizes must be positive.")
 
     config = load_config(args.config)
+    default_lora_dir = "diffusion_lora_v2" if config.crack_prior_mode == "paired_residual" else "diffusion_lora"
     output_dir = Path(args.output_dir).resolve() if args.output_dir else (
-        config.output_root.parent / "diffusion_lora" / "lora_data"
+        config.output_root.parent / default_lora_dir / "lora_data"
     )
     train_dir = ensure_dir(output_dir / "train")
 
@@ -117,6 +117,11 @@ def main() -> None:
             "guide_darken": float(config.guide_darken),
             "guide_blur": float(config.guide_blur),
             "guide_label_dilate_px": int(config.guide_label_dilate_px),
+            "crack_prior_mode": config.crack_prior_mode,
+            "crack_prior_alpha": float(config.crack_prior_alpha),
+            "crack_prior_clip_percentile": float(config.crack_prior_clip_percentile),
+            "crack_prior_mask_dilate_px": int(config.crack_prior_mask_dilate_px),
+            "crack_prior_blur_px": float(config.crack_prior_blur_px),
             "caption": args.caption,
             "train_dir": str(train_dir),
         },
@@ -154,7 +159,17 @@ def export_pair_samples(
         mask_label = _crop_resize(mask_raw, crop_box, resolution, Image.Resampling.NEAREST)
         mask_label = threshold_mask(mask_label)
         mask_train = dilate_binary_mask(mask_label, mask_train_dilate_px)
-        if config.guide_crack:
+        if config.crack_prior_mode == "paired_residual":
+            condition = make_paired_residual_crack_guide(
+                background=background,
+                defect=target,
+                mask_label=mask_label,
+                alpha=config.crack_prior_alpha,
+                clip_percentile=config.crack_prior_clip_percentile,
+                mask_dilate_px=config.crack_prior_mask_dilate_px,
+                blur_radius=config.crack_prior_blur_px,
+            )
+        elif config.crack_prior_mode == "mask_dark" or config.guide_crack:
             condition = make_crack_guide(
                 background=background,
                 mask_label=mask_label,
@@ -198,6 +213,8 @@ def export_pair_samples(
             "caption_path": str(caption_path),
             "caption": caption,
             "guide_crack": bool(config.guide_crack),
+            "crack_prior_mode": config.crack_prior_mode,
+            "crack_prior_alpha": float(config.crack_prior_alpha),
         }
         write_json(metadata_path, metadata)
         records.append({**metadata, "metadata_path": str(metadata_path)})
@@ -218,6 +235,7 @@ def _resolve_pair_record_paths(record: dict, config) -> dict:
         "background_roi_path",
         "mask_raw_roi_path",
         "mask_edit_roi_path",
+        "mask_paste_roi_path",
     ]:
         value = record.get(key, "")
         if value:
