@@ -14,6 +14,7 @@ dependencies = [
   "numpy>=1.24",
   "opencv-python-headless>=4.8",
   "pandas>=2.0",
+  "peft>=0.11",
   "Pillow>=10.0",
   "PyYAML>=6.0",
   "safetensors>=0.4",
@@ -26,6 +27,8 @@ dependencies = [
 prepare_rois = "crack_synth.methods.diffusion_baseline.prepare_rois:main"
 generate_baseline = "crack_synth.methods.diffusion_baseline.generate_baseline:main"
 evaluate_generation = "crack_synth.methods.diffusion_baseline.evaluate_generation:main"
+prepare_lora_data = "crack_synth.methods.diffusion_lora.prepare_lora_data:main"
+train_inpaint_lora = "crack_synth.methods.diffusion_lora.train_inpaint_lora:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

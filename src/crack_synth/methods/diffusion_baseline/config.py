@@ -32,11 +32,28 @@ class BaselineConfig:
     guidance_scale: float = 5.5
     strength: float = 0.88
     mask_blur: float = 1.0
+    local_inpaint: bool = False
+    local_crop_size: int = 192
+    background_overlay: bool = True
+    overlay_blur_px: float = 2.0
+    padding_mask_crop: int = 64
+    apply_overlay: bool = True
+    save_guide_image: bool = True
+    save_diff_abs: bool = True
+    save_quality_metrics: bool = True
+    guide_crack: bool = False
+    guide_darken: float = 45.0
+    guide_blur: float = 0.6
+    guide_label_dilate_px: int = 1
+    lora_path: str = ""
+    lora_scale: float = 0.75
+    lora_adapter_name: str = "ctwirecrack"
     device: str = "auto"
     dtype: str = "float16"
     local_files_only: bool = False
     enable_attention_slicing: bool = True
     enable_xformers: bool = False
+    disable_safety_checker: bool = False
 
     def to_json_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -92,11 +109,28 @@ def load_config(config_path: str | Path) -> BaselineConfig:
         guidance_scale=float(raw.get("guidance_scale", 5.5)),
         strength=float(raw.get("strength", 0.88)),
         mask_blur=float(raw.get("mask_blur", 1.0)),
+        local_inpaint=bool(raw.get("local_inpaint", False)),
+        local_crop_size=int(raw.get("local_crop_size", 192)),
+        background_overlay=bool(raw.get("background_overlay", True)),
+        overlay_blur_px=float(raw.get("overlay_blur_px", 2.0)),
+        padding_mask_crop=int(raw.get("padding_mask_crop", 64)),
+        apply_overlay=bool(raw.get("apply_overlay", raw.get("background_overlay", True))),
+        save_guide_image=bool(raw.get("save_guide_image", True)),
+        save_diff_abs=bool(raw.get("save_diff_abs", True)),
+        save_quality_metrics=bool(raw.get("save_quality_metrics", True)),
+        guide_crack=bool(raw.get("guide_crack", False)),
+        guide_darken=float(raw.get("guide_darken", 45.0)),
+        guide_blur=float(raw.get("guide_blur", 0.6)),
+        guide_label_dilate_px=int(raw.get("guide_label_dilate_px", 1)),
+        lora_path=_resolve_optional_path_string(base_dir, raw.get("lora_path")),
+        lora_scale=float(raw.get("lora_scale", 0.75)),
+        lora_adapter_name=str(raw.get("lora_adapter_name", "ctwirecrack")),
         device=str(raw.get("device", "auto")),
         dtype=str(raw.get("dtype", "float16")),
         local_files_only=bool(raw.get("local_files_only", False)),
         enable_attention_slicing=bool(raw.get("enable_attention_slicing", True)),
         enable_xformers=bool(raw.get("enable_xformers", False)),
+        disable_safety_checker=bool(raw.get("disable_safety_checker", False)),
     )
     _validate_config(config)
     return config
@@ -115,6 +149,22 @@ def _validate_config(config: BaselineConfig) -> None:
         raise ValueError("num_inference_steps must be positive.")
     if not (0.0 <= config.strength <= 1.0):
         raise ValueError("strength must be in [0, 1].")
+    if config.local_crop_size <= 0:
+        raise ValueError("local_crop_size must be positive.")
+    if config.local_crop_size > config.roi_out_size:
+        raise ValueError("local_crop_size cannot exceed roi_out_size.")
+    if config.overlay_blur_px < 0:
+        raise ValueError("overlay_blur_px cannot be negative.")
+    if config.padding_mask_crop < 0:
+        raise ValueError("padding_mask_crop cannot be negative.")
+    if config.guide_darken < 0:
+        raise ValueError("guide_darken cannot be negative.")
+    if config.guide_blur < 0:
+        raise ValueError("guide_blur cannot be negative.")
+    if config.guide_label_dilate_px < 0:
+        raise ValueError("guide_label_dilate_px cannot be negative.")
+    if not (0.0 <= config.lora_scale <= 2.0):
+        raise ValueError("lora_scale should normally be in [0, 2].")
 
 
 def dump_resolved_config(config: BaselineConfig, output_path: str | Path) -> None:
@@ -128,6 +178,15 @@ def _load_mapping(path: Path) -> dict[str, Any]:
     if yaml is not None:
         return yaml.safe_load(text) or {}
     return _minimal_yaml_load(text)
+
+
+def _resolve_optional_path_string(base_dir: Path, raw_value: Any) -> str:
+    if raw_value is None:
+        return ""
+    value = str(raw_value).strip()
+    if not value:
+        return ""
+    return str(_resolve_path(base_dir, value))
 
 
 def _minimal_yaml_load(text: str) -> dict[str, Any]:
