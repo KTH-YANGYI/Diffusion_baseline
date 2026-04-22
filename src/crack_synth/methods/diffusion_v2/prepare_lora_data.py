@@ -6,18 +6,18 @@ import json
 
 from PIL import Image
 
-from crack_synth.methods.diffusion_baseline.config import DEFAULT_CONFIG_PATH, load_config
-from crack_synth.methods.diffusion_baseline.guide import make_crack_guide, make_paired_residual_crack_guide
-from crack_synth.methods.diffusion_baseline.io_utils import (
+from .config import DEFAULT_CONFIG_PATH, load_config
+from .guide import make_crack_guide, make_paired_residual_crack_guide
+from .io_utils import (
     ensure_dir,
     read_jsonl,
     write_csv_records,
     write_json,
     write_jsonl,
 )
-from crack_synth.methods.diffusion_baseline.paths import resolve_project_path
-from crack_synth.methods.diffusion_baseline.progress import tqdm
-from crack_synth.methods.diffusion_baseline.roi import (
+from .paths import resolve_project_path
+from .progress import tqdm
+from .roi import (
     compute_union_bbox,
     dilate_binary_mask,
     fixed_square_crop_box_from_bbox,
@@ -61,10 +61,7 @@ def main() -> None:
         raise ValueError("--crop-sizes must be positive.")
 
     config = load_config(args.config)
-    default_lora_dir = "diffusion_lora_v2" if config.crack_prior_mode == "paired_residual" else "diffusion_lora"
-    output_dir = Path(args.output_dir).resolve() if args.output_dir else (
-        config.output_root.parent / default_lora_dir / "lora_data"
-    )
+    output_dir = Path(args.output_dir).resolve() if args.output_dir else (config.output_root / "lora_data")
     train_dir = ensure_dir(output_dir / "train")
 
     pair_file = config.output_root / "roi_assets" / "roi_pairs.jsonl"
@@ -103,7 +100,7 @@ def main() -> None:
     write_json(
         output_dir / "summary.json",
         {
-            "generator": "crack_synth.methods.diffusion_lora.prepare_lora_data",
+            "generator": "crack_synth.methods.diffusion_v2.prepare_lora_data",
             "source_pair_file": str(pair_file),
             "source_pair_count": len(all_pairs),
             "pair_offset": int(args.pair_offset),

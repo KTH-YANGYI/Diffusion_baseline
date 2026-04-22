@@ -8,7 +8,7 @@ import random
 
 from PIL import Image, ImageDraw
 
-from .config import DEFAULT_CONFIG_PATH, BaselineConfig, dump_resolved_config, load_config
+from .config import DEFAULT_CONFIG_PATH, DiffusionV2Config, dump_resolved_config, load_config
 from .guide import make_crack_guide, make_paired_residual_crack_guide
 from .io_utils import ensure_dir, read_jsonl, write_csv_records, write_json, write_jsonl
 from .paths import resolve_project_path
@@ -18,7 +18,7 @@ from .roi import blur_mask, compute_union_bbox, dilate_binary_mask, load_image
 
 
 def build_parser() -> ArgumentParser:
-    parser = ArgumentParser(description="Generate diffusion inpainting outputs from prepared crack/normal pairs.")
+    parser = ArgumentParser(description="Generate diffusion v2 inpainting outputs from prepared crack/normal pairs.")
     parser.add_argument("--config", type=str, default=DEFAULT_CONFIG_PATH, help="Path to YAML config.")
     parser.add_argument("--plan-only", action="store_true", help="Write planned_pairs only, skip model loading and inference.")
     parser.add_argument("--pair-offset", type=int, default=0, help="Skip this many prepared pairs before planning.")
@@ -90,7 +90,7 @@ def main() -> None:
     batch_count = (len(planned_pairs) + inference_batch_size - 1) // inference_batch_size
     for batch_records in tqdm(
         _iter_batches(planned_pairs, inference_batch_size),
-        desc="generate_baseline",
+        desc="generate_v2",
         unit="batch",
         total=batch_count,
     ):
@@ -237,7 +237,7 @@ def main() -> None:
 def plan_pairs(
     *,
     pairs: list[dict],
-    config: BaselineConfig,
+    config: DiffusionV2Config,
     seeds_per_pair: int,
     run_dir: Path,
 ) -> list[dict]:
@@ -321,7 +321,7 @@ def plan_pairs(
     return planned
 
 
-def build_pipeline(config: BaselineConfig):
+def build_pipeline(config: DiffusionV2Config):
     try:
         import torch
         from diffusers import AutoPipelineForInpainting
@@ -368,7 +368,7 @@ def build_pipeline(config: BaselineConfig):
     return pipe, torch, device_name, torch_dtype
 
 
-def _set_lora_scale(pipe, config: BaselineConfig, lora_scale: float) -> None:
+def _set_lora_scale(pipe, config: DiffusionV2Config, lora_scale: float) -> None:
     if not config.lora_path:
         return
     if hasattr(pipe, "set_adapters"):
@@ -378,7 +378,7 @@ def _set_lora_scale(pipe, config: BaselineConfig, lora_scale: float) -> None:
             pipe.set_adapters([config.lora_adapter_name], [float(lora_scale)])
 
 
-def _uses_candidate_grid(config: BaselineConfig) -> bool:
+def _uses_candidate_grid(config: DiffusionV2Config) -> bool:
     return bool(
         config.candidate_local_crop_sizes
         or config.candidate_strengths
@@ -389,7 +389,7 @@ def _uses_candidate_grid(config: BaselineConfig) -> bool:
     )
 
 
-def _default_seed_count(config: BaselineConfig) -> int:
+def _default_seed_count(config: DiffusionV2Config) -> int:
     if _uses_candidate_grid(config) and config.candidate_seed_count > 0:
         return config.candidate_seed_count
     return config.seeds_per_pair
@@ -429,7 +429,7 @@ def _iter_batches(records: list[dict], batch_size: int):
         yield records[start : start + batch_size]
 
 
-def _prepare_inference_input(record: dict, config: BaselineConfig, torch, device_name: str) -> dict:
+def _prepare_inference_input(record: dict, config: DiffusionV2Config, torch, device_name: str) -> dict:
     full_background = load_image(record["background_roi_path"])
     if full_background.size != (config.roi_out_size, config.roi_out_size):
         raise ValueError(
@@ -515,7 +515,7 @@ def _prepare_inference_input(record: dict, config: BaselineConfig, torch, device
 def _postprocess_model_output(
     model_output: Image.Image,
     item: dict,
-    config: BaselineConfig,
+    config: DiffusionV2Config,
 ) -> Image.Image:
     if item["local_inpaint"]:
         crop_box = tuple(int(value) for value in item["local_crop_box_xyxy"])
@@ -599,7 +599,7 @@ def _parse_optional_int(value: object) -> int | None:
         return None
 
 
-def _resolve_pair_record_paths(record: dict, config: BaselineConfig) -> dict:
+def _resolve_pair_record_paths(record: dict, config: DiffusionV2Config) -> dict:
     resolved = dict(record)
     for key in [
         "defect_image_path",
@@ -624,7 +624,7 @@ def _resolve_pair_record_paths(record: dict, config: BaselineConfig) -> dict:
     return resolved
 
 
-def _write_candidate_artifacts(run_dir: Path, outputs: list[dict], config: BaselineConfig) -> None:
+def _write_candidate_artifacts(run_dir: Path, outputs: list[dict], config: DiffusionV2Config) -> None:
     if not outputs:
         return
     score_keys = [

@@ -250,7 +250,7 @@ def build_summary(*, run_dir: Path, records: list[dict], preview_count: int, thr
     pass_count = sum(1 for record in records if bool(record["eval_pass_overall"]))
 
     return {
-        "generator": "crack_synth.methods.diffusion_baseline.evaluate_generation",
+        "generator": "crack_synth.methods.diffusion_v2.evaluate_generation",
         "run_dir": str(run_dir),
         "sample_count": len(records),
         "pass_count": pass_count,

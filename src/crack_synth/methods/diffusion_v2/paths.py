@@ -17,8 +17,6 @@ def resolve_project_path(
     parts = path.parts
     if parts and parts[0] == "dataset_new":
         return (dataset_root / Path(*parts[1:])).resolve()
-    if len(parts) >= 2 and parts[:2] == ("outputs", "baseline"):
-        return (output_root / Path(*parts[2:])).resolve()
     return (repo_root / path).resolve()
 
 

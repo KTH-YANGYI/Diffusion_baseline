@@ -9,8 +9,8 @@ import random
 import numpy as np
 from PIL import Image
 
-from crack_synth.methods.diffusion_baseline.io_utils import ensure_dir, write_json
-from crack_synth.methods.diffusion_baseline.progress import tqdm
+from .io_utils import ensure_dir, write_json
+from .progress import tqdm
 
 
 def build_parser() -> ArgumentParser:

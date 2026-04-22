@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "crack-synth"
 version = "0.1.0"
-description = "Task-oriented crack synthesis workspace with a diffusion baseline method."
+description = "Task-oriented crack synthesis workspace with a single diffusion v2 pipeline."
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
 dependencies = [
@@ -24,11 +24,11 @@ dependencies = [
 ]
 
 [project.scripts]
-prepare_rois = "crack_synth.methods.diffusion_baseline.prepare_rois:main"
-generate_baseline = "crack_synth.methods.diffusion_baseline.generate_baseline:main"
-evaluate_generation = "crack_synth.methods.diffusion_baseline.evaluate_generation:main"
-prepare_lora_data = "crack_synth.methods.diffusion_lora.prepare_lora_data:main"
-train_inpaint_lora = "crack_synth.methods.diffusion_lora.train_inpaint_lora:main"
+prepare_rois = "crack_synth.methods.diffusion_v2.prepare_rois:main"
+generate_cracks = "crack_synth.methods.diffusion_v2.generate:main"
+evaluate_generation = "crack_synth.methods.diffusion_v2.evaluate_generation:main"
+prepare_lora_data = "crack_synth.methods.diffusion_v2.prepare_lora_data:main"
+train_inpaint_lora = "crack_synth.methods.diffusion_v2.train_inpaint_lora:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

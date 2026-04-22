@@ -12,11 +12,11 @@ except ImportError:
     yaml = None
 
 
-DEFAULT_CONFIG_PATH = "configs/methods/diffusion_baseline/contact_wire_v1.yaml"
+DEFAULT_CONFIG_PATH = "configs/methods/diffusion_v2/contact_wire_v2.yaml"
 
 
 @dataclass(frozen=True)
-class BaselineConfig:
+class DiffusionV2Config:
     repo_root: Path
     dataset_root: Path
     model_id_or_path: str
@@ -96,7 +96,7 @@ def _discover_repo_root(config_path: Path) -> Path:
     return config_path.parent.resolve()
 
 
-def load_config(config_path: str | Path) -> BaselineConfig:
+def load_config(config_path: str | Path) -> DiffusionV2Config:
     config_path = Path(config_path).resolve()
     base_dir = config_path.parent
     raw = _load_mapping(config_path) or {}
@@ -106,9 +106,9 @@ def load_config(config_path: str | Path) -> BaselineConfig:
     output_root = _resolve_path(
         base_dir,
         raw.get("output_root"),
-        default=repo_root / "artifacts" / "dataset_real" / "methods" / "diffusion_baseline",
+        default=repo_root / "artifacts" / "dataset_real" / "methods" / "diffusion_v2",
     )
-    config = BaselineConfig(
+    config = DiffusionV2Config(
         repo_root=repo_root,
         dataset_root=dataset_root,
         model_id_or_path=str(raw.get("model_id_or_path", "stable-diffusion-v1-5/stable-diffusion-inpainting")),
@@ -166,7 +166,7 @@ def load_config(config_path: str | Path) -> BaselineConfig:
     return config
 
 
-def _validate_config(config: BaselineConfig) -> None:
+def _validate_config(config: DiffusionV2Config) -> None:
     if config.roi_out_size <= 0:
         raise ValueError("roi_out_size must be positive.")
     if config.mask_edit_dilate_px < 0:
@@ -230,7 +230,7 @@ def _validate_config(config: BaselineConfig) -> None:
         raise ValueError("lora_scale should normally be in [0, 2].")
 
 
-def dump_resolved_config(config: BaselineConfig, output_path: str | Path) -> None:
+def dump_resolved_config(config: DiffusionV2Config, output_path: str | Path) -> None:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(config.to_json_dict(), indent=2, ensure_ascii=False), encoding="utf-8")

@@ -1,6 +1,6 @@
 # dataset_real 数据集说明
 
-`dataset_real` 是当前扩散补全流程使用的一一配对数据集。数据本身不提交到 GitHub；仓库只保留代码、配置和本说明。
+`dataset_real` 是 `diffusion_v2` 使用的一一配对真实数据集。数据本身不提交到 Git；仓库只保留代码、配置和说明。
 
 ## 本地位置
 
@@ -10,17 +10,15 @@
 C:/Users/18046/Desktop/master/masterthesis/dataset_real
 ```
 
-如需在别的机器复现，可以把数据放到任意位置，然后修改：
+如需换机器或换目录，修改：
 
 ```text
-configs/methods/diffusion_baseline/contact_wire_v1.yaml
+configs/methods/diffusion_v2/contact_wire_v2.yaml
 ```
 
 里的 `dataset_root`。
 
 ## 目录结构
-
-数据集根目录应包含两个子目录：
 
 ```text
 dataset_real/
@@ -43,17 +41,11 @@ dataset_real/
 - `crack/`: 28 张 `.jpg`
 - `crack/`: 28 个同名 `.json`
 - `normal/`: 28 张 `.jpg`
+- 图片尺寸：全部 `512x512`
 
 ## 标注格式
 
-缺陷标注文件是 LabelMe 风格 JSON。关键字段包括：
-
-- `imagePath`
-- `imageHeight`
-- `imageWidth`
-- `shapes`
-
-代码会读取 `shapes[*].points`，并支持以下 `shape_type`：
+缺陷标注文件是 LabelMe 风格 JSON。代码读取 `shapes[*].points`，支持：
 
 - `polygon`
 - `rectangle`
@@ -61,20 +53,22 @@ dataset_real/
 - `line`
 - `linestrip`
 
-生成 ROI 时，JSON 标注会被转换成二值 mask：
+生成的关键 mask：
 
-- `mask_raw_roi.png`: JSON 原始标注区域
-- `mask_edit_roi.png`: 在 raw mask 基础上按 `mask_edit_dilate_px` 外扩后的 inpainting 区域
-
-当前默认：
-
-```yaml
-mask_edit_dilate_px: 3
-```
+- `mask_raw_roi.png`: JSON 原始标注区域。
+- `mask_edit_roi.png`: raw mask 按 `mask_edit_dilate_px` 外扩后的 inpainting 区域。
+- `mask_paste_roi.png`: 后处理 paste 时使用的柔和融合区域。
 
 ## 配对规则
 
-代码优先读取显式配对文件。支持放在数据集根目录或 `mapping/` 子目录下：
+代码不会从图片内容自动判断“同一视频”。同一视频配对需要由数据组织方式保证。
+
+优先级如下：
+
+1. 读取显式配对文件。
+2. 如果没有配对文件，按文件名中的数字排序后一一配对。
+
+支持的显式配对文件名：
 
 - `pairs.csv`
 - `pair_mapping.csv`
@@ -87,8 +81,6 @@ CSV 支持常见列名：
 
 - 缺陷图列：`defect_image`, `crack_image`, `defect`, `crack`, `image_name`, `crack_name`
 - 正常图列：`normal_image`, `background_image`, `normal`, `background`, `normal_name`
-
-如果没有显式配对文件，代码会按文件名中的数字排序后，将 `crack/` 和 `normal/` 一一配对。
 
 当前本地数据没有显式 mapping 文件，因此使用 `sorted_filename_order`。当前解析出的配对为：
 
@@ -123,30 +115,37 @@ CSV 支持常见列名：
 | `323_crop.jpg` | `319_crop.jpg` |
 | `341_crop.jpg` | `337_crop.jpg` |
 
-## 当前生成流程中的作用
+如果以后混入多个视频，建议新增 `pairs.csv`，明确每张 crack 图对应哪张 normal 图，避免排序时跨视频配错。
 
-当前 pipeline 对每个 pair 执行：
+## 在 v2 流程中的作用
 
-1. 读取 `crack/*.jpg` 和同名 `.json`
-2. 将 JSON 标注转成 mask
-3. 读取对应的 `normal/*.jpg`
-4. 用相同 crop box 裁出缺陷 ROI 和正常背景 ROI
-5. 用正常背景 ROI + edit mask 做 Stable Diffusion Inpainting
+每个 pair 会进入下面的数据流：
 
-缺陷图不会作为视觉条件输入模型；它只用于提供 mask 和 ROI 位置。
+```text
+crack image + crack JSON + normal image
+    -> prepare_rois
+    -> defect_roi.png
+    -> background_roi.png
+    -> mask_raw_roi.png
+    -> mask_edit_roi.png
+    -> mask_paste_roi.png
+```
 
-## 复现检查
+因为当前原图已经是 `512x512`，`prepare_rois` 的 `crop_box_xyxy` 通常是 `[0, 0, 512, 512]`。它的主要价值是生成统一资产和 mask，而不是再把原图裁小。
 
-放好数据后，可以运行：
+后续真正局部化编辑发生在：
+
+- `generate_cracks` 的 `local_inpaint`：围绕裂缝 mask 裁 `128/160` 小窗口，resize 到 512 后生成，再贴回原图。
+- `prepare_lora_data`：围绕裂缝 mask 裁 `96/128/160/192/256` 多尺度训练样本。
+
+复现检查：
 
 ```bash
-prepare_rois --config configs/methods/diffusion_baseline/contact_wire_v1.yaml
+prepare_rois --config configs/methods/diffusion_v2/contact_wire_v2.yaml
 ```
 
 成功后应看到：
 
 ```text
-artifacts/dataset_real/methods/diffusion_baseline/roi_assets/roi_pairs.jsonl
+artifacts/dataset_real/methods/diffusion_v2/roi_assets/roi_pairs.jsonl
 ```
-
-其中 `pair_count` 应等于本地数据配对数量。当前数据是 `28`。
